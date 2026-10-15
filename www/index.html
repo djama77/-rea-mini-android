@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>mini-REA – Analyseur d'applications JS/Electron</title>
+<style>
+:root{--bg:#f5f6f8;--sf:#fff;--tx:#14213d;--mu:#5b6478;--ac:#e8590c;--ln:#d5d9e2;--ok:#2b8a3e;--wr:#c92a2a;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0d1526;--sf:#16213a;--tx:#e8ecf5;--mu:#98a2bb;--ac:#ff8a3d;--ln:#2a3858;--ok:#51cf66;--wr:#ff8787}}
+:root[data-theme="dark"]{--bg:#0d1526;--sf:#16213a;--tx:#e8ecf5;--mu:#98a2bb;--ac:#ff8a3d;--ln:#2a3858;--ok:#51cf66;--wr:#ff8787}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:860px;margin:0 auto;padding:20px 16px 48px}
+h1{font:700 1.7rem/1.2 Georgia,"Times New Roman",serif;margin:8px 0 4px}
+h2{font:600 1.1rem/1.3 Georgia,serif;margin:28px 0 10px}
+p.sub{color:var(--mu);margin:0 0 18px}
+#drop{border:2px dashed var(--ln);border-radius:12px;background:var(--sf);padding:26px 16px;text-align:center}
+#drop.over{border-color:var(--ac)}
+.btns{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:12px}
+button,label.b{font:inherit;font-weight:600;border:0;border-radius:8px;padding:11px 16px;background:var(--ac);color:#fff;cursor:pointer;min-height:44px}
+button.alt,label.b.alt{background:transparent;color:var(--tx);border:1.5px solid var(--ln)}
+button:focus-visible,label.b:focus-within{outline:3px solid var(--tx);outline-offset:2px}
+input[type=file]{position:absolute;opacity:0;width:1px;height:1px}
+#st{color:var(--mu);margin-top:12px;min-height:1.5em}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
+.k{background:var(--sf);border:1px solid var(--ln);border-radius:8px;padding:10px 12px}
+.k b{display:block;font-size:1.4rem}.k span{color:var(--mu);font-size:.85rem}
+.warn{color:var(--wr)}.good{color:var(--ok)}
+.sc{overflow-x:auto;background:var(--sf);border:1px solid var(--ln);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:.88rem}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--ln);vertical-align:top}
+td.m,code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.82rem;word-break:break-all}
+pre{background:var(--sf);border:1px solid var(--ln);border-radius:8px;padding:12px;overflow-x:auto;max-height:420px;font-size:.8rem;white-space:pre-wrap}
+.hid{display:none}
+svg.g text{font:12px ui-monospace,Menlo,Consolas,monospace;fill:var(--tx)}
+svg.g path{fill:none;stroke:var(--mu);stroke-width:1;opacity:.45}
+svg.g circle{fill:var(--tx)}svg.g circle.e{fill:var(--ac)}
+@media (prefers-reduced-motion:no-preference){#res{animation:f .3s}@keyframes f{from{opacity:0}}}
+</style>
+</head>
+<body>
+<main>
+<h1>mini-REA</h1>
+<p class="sub">Analysez une application JavaScript ou Electron sans son code source commenté. Tout reste sur votre appareil.</p>
+
+<div id="drop">
+  <div>Déposez un dossier, un fichier <b>.zip</b> ou <b>.asar</b></div>
+  <div class="btns">
+    <label class="b">Choisir un .zip / .asar<input id="f1" type="file" accept=".zip,.asar"></label>
+    <label class="b alt">Choisir un dossier<input id="f2" type="file" webkitdirectory multiple></label>
+  </div>
+  <div id="st" role="status"></div>
+</div>
+
+<div id="res" class="hid">
+  <h2>Vue d'ensemble</h2><div class="grid" id="kp"></div>
+  <h2>Frontières Electron</h2><div class="sc"><table id="tb"></table></div>
+  <h2>Graphe des imports</h2><div class="sc" id="gr"></div><p class="sub" id="grn" style="margin:6px 0 0;font-size:.85rem"></p>
+  <h2>Points de vigilance</h2><div class="sc"><table id="tw"></table></div>
+  <h2>Canaux IPC</h2><div class="sc"><table id="ti"></table></div>
+  <h2>Dépendances externes</h2><div class="sc"><table id="td"></table></div>
+  <h2>Rapport Markdown</h2>
+  <div class="btns" style="justify-content:flex-start;margin:0 0 10px">
+    <button id="cp">Copier le rapport</button>
+    <button id="tg" class="alt">Passer en version institutionnelle</button>
+  </div>
+  <pre id="md"></pre>
+</div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+(function(){
+const $=id=>document.getElementById(id);
+const TXT=/\.(js|mjs|cjs|jsx|ts|tsx|json|html|htm)$/i, SRC=/\.(js|mjs|cjs|jsx|ts|tsx)$/i;
+const BUILTIN=new Set(['fs','path','os','http','https','net','tls','url','util','events','stream','crypto','child_process','zlib','buffer','assert','readline','worker_threads','cluster','dns','module','process','timers','vm','querystring','string_decoder','tty','v8','perf_hooks','async_hooks']);
+let REPORT='',TECH='',INST='',LAST=null,MODE='tech';
+
+function st(m){$('st').textContent=m}
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const kb=n=>n>1048576?(n/1048576).toFixed(1)+' Mo':Math.max(1,Math.round(n/1024))+' Ko';
+function lineOf(t,i){let n=1;for(let k=0;k<i;k++)if(t.charCodeAt(k)===10)n++;return n}
+
+// ---- Chargement -> Map chemin -> {size, text?, bytes?}
+async function fromZip(buf){
+  const z=await JSZip.loadAsync(buf), files=new Map();
+  for(const [p,e] of Object.entries(z.files)){
+    if(e.dir)continue;
+    const bytes=await e.async('uint8array');
+    files.set(p,mk(p,bytes));
+  }
+  return files;
+}
+function mk(p,bytes){
+  const o={size:bytes.length,bytes};
+  if(TXT.test(p)&&bytes.length<6e6)o.text=new TextDecoder().decode(bytes);
+  return o;
+}
+function fromAsar(buf){
+  const dv=new DataView(buf), hl=dv.getUint32(12,true);
+  const hdr=JSON.parse(new TextDecoder().decode(new Uint8Array(buf,16,hl)));
+  const base=8+dv.getUint32(4,true), files=new Map();
+  (function walk(n,pre){
+    for(const [k,v] of Object.entries(n.files||{})){
+      const p=pre+k;
+      if(v.files)walk(v,p+'/');
+      else if(v.offset!==undefined&&!v.unpacked)files.set(p,mk(p,new Uint8Array(buf,base+Number(v.offset),v.size)));
+      else files.set(p,{size:v.size||0});
+    }
+  })(hdr,'');
+  return files;
+}
+async function fromList(list){
+  const files=new Map();
+  for(const f of list){
+    const p=(f.webkitRelativePath||f.name).replace(/^[^/]+\//,'');
+    files.set(p,mk(p,new Uint8Array(await f.arrayBuffer())));
+  }
+  return files;
+}
+async function sha(bytes){
+  const h=new Uint8Array(await crypto.subtle.digest('SHA-256',bytes));
+  return [...h].map(b=>b.toString(16).padStart(2,'0')).join('').slice(0,16);
+}
+
+// ---- Analyse
+function resolve(from,spec,files){
+  const parts=from.split('/').slice(0,-1);
+  for(const s of spec.split('/')){if(s==='..')parts.pop();else if(s!=='.'&&s)parts.push(s)}
+  const b=parts.join('/');
+  for(const c of [b,b+'.js',b+'.mjs',b+'.cjs',b+'.ts',b+'.json',b+'/index.js'])if(files.has(c))return c;
+  return null;
+}
+function analyse(files){
+  const R={n:files.size,total:0,ext:{},imports:[],ext_deps:{},builtin:{},unresolved:[],ipc:[],warn:[],roles:[],pkg:null,largest:[]};
+  const rx=[/import\s+(?:[^'"()]*?\sfrom\s+)?['"]([^'"]+)['"]/g,/import\(\s*['"]([^'"]+)['"]\s*\)/g,/require\(\s*['"]([^'"]+)['"]\s*\)/g];
+  for(const [p,f] of files){
+    R.total+=f.size;
+    const e=(p.match(/\.([^./]+)$/)||[,'(aucune)'])[1].toLowerCase();
+    R.ext[e]=(R.ext[e]||0)+1;
+    R.largest.push([p,f.size]);
+    if(p==='package.json'&&f.text){try{R.pkg=JSON.parse(f.text)}catch(_){}}
+  }
+  R.largest.sort((a,b)=>b[1]-a[1]);R.largest=R.largest.slice(0,5);
+  const main=R.pkg&&R.pkg.main;
+  const preloads=new Set();
+  for(const [p,f] of files){
+    if(!f.text)continue;
+    const t=f.text;
+    if(SRC.test(p)){
+      for(const r of rx){r.lastIndex=0;let m;while((m=r.exec(t))){
+        const s=m[1],ln=lineOf(t,m.index);
+        if(s.startsWith('.')||s.startsWith('/')){
+          const to=resolve(p,s,files);
+          if(to)R.imports.push([p,to]);else R.unresolved.push([p,s,ln]);
+        }else{
+          const base=s.replace(/^node:/,'').split('/')[0];
+          if(BUILTIN.has(base)||s.startsWith('node:'))R.builtin[base]=(R.builtin[base]||0)+1;
+          else{const pk=s.startsWith('@')?s.split('/').slice(0,2).join('/'):s.split('/')[0];(R.ext_deps[pk]=R.ext_deps[pk]||new Set()).add(p)}
+        }
+      }}
+      let m;const ipc=/(ipcMain\.(?:handle|on|once)|ipcRenderer\.(?:invoke|send|on|sendSync))\(\s*['"]([^'"]+)['"]/g;
+      while((m=ipc.exec(t)))R.ipc.push([m[2],m[1],p,lineOf(t,m.index)]);
+      const pl=/preload\s*:\s*[^,}]*?['"]([^'"]+)['"]/g;
+      while((m=pl.exec(t))){preloads.add(m[1].replace(/^.*[\\/]/,''))}
+      const chk=[[/nodeIntegration\s*:\s*true/,'nodeIntegration activé : le renderer accède à Node.js'],
+        [/contextIsolation\s*:\s*false/,'contextIsolation désactivé : isolation preload/page perdue'],
+        [/webSecurity\s*:\s*false/,'webSecurity désactivé : règles same-origin ignorées'],
+        [/allowRunningInsecureContent\s*:\s*true/,'contenu non sécurisé autorisé'],
+        [/\beval\s*\(|new Function\s*\(/,'évaluation dynamique de code (eval / new Function)'],
+        [/loadURL\(\s*['"]http:\/\//,'chargement d\'une URL http non chiffrée']];
+      if(!/node_modules\//.test(p)&&t.length<2e6)for(const [r,msg] of chk){const x=r.exec(t);if(x)R.warn.push([msg,p,lineOf(t,x.index)])}
+      if(/BrowserWindow|app\.whenReady|ipcMain/.test(t))R.roles.push(['Processus principal',p,'usage de BrowserWindow / app / ipcMain']);
+      if(/contextBridge|ipcRenderer/.test(t)&&/preload/i.test(p+t.slice(0,300)))R.roles.push(['Preload',p,'contextBridge / ipcRenderer']);
+    }else if(/\.html?$/i.test(p)&&!/node_modules\//.test(p)){
+      R.roles.push(['Renderer (page)',p,'page HTML']);
+    }
+  }
+  if(main)R.roles.unshift(['Point d\'entrée',main,'champ "main" de package.json']);
+  for(const p of preloads)for(const k of files.keys())if(k.endsWith('/'+p)||k===p)R.roles.push(['Preload',k,'référencé par l\'option preload']);
+  R.imports=[...new Map(R.imports.map(i=>[i.join('>'),i])).values()];
+  return R;
+}
+
+// ---- Rendu
+function rows(t,head,data,empty){
+  $(t).innerHTML=data.length?'<tr>'+head.map(h=>'<th>'+h+'</th>').join('')+'</tr>'+data.map(r=>'<tr>'+r.map((c,i)=>'<td'+(i>0?' class="m"':'')+'>'+c+'</td>').join('')+'</tr>').join(''):'<tr><td>'+empty+'</td></tr>';
+}
+function inst(){
+  const {R,deps,roles,ipc,label}=LAST,c=s=>String(s).replace(/\|/g,'\\|');
+  const T=(h,rs)=>rs.length?['| '+h.join(' | ')+' |','|'+h.map(()=>'---').join('|')+'|'].concat(rs.map(r=>'| '+r.map(c).join(' | ')+' |')).join('\n'):'_Aucun élément relevé._';
+  const RC=[['nodeIntegration','Désactiver nodeIntegration et n\'exposer que les fonctions nécessaires via un script preload (contextBridge).'],['contextIsolation','Réactiver contextIsolation pour séparer le preload de la page.'],['webSecurity','Réactiver webSecurity (règles same-origin).'],['non sécurisé','Interdire le contenu non sécurisé (allowRunningInsecureContent).'],['eval','Remplacer eval / new Function par du code statique.'],['http','Charger les ressources distantes en HTTPS uniquement.']];
+  const rec=[...new Set(R.warn.map(w=>(RC.find(r=>w[0].includes(r[0]))||[0,0])[1]).filter(Boolean))];
+  const name=R.pkg&&R.pkg.name?R.pkg.name+(R.pkg.version?' v'+R.pkg.version:''):label;
+  return [
+`# Note d'analyse technique d'application`,'',
+`**République de Djibouti — Institut National de la Statistique de Djibouti (INSTAD)**`,'',
+T(['Rubrique','Valeur'],[['Application analysée',name],['Source examinée',label],['Date de l\'analyse',new Date().toLocaleDateString('fr-FR')],['Méthode','Analyse statique automatisée (mini-REA), sans exécution du code'],['Établi par','À compléter'],['Visa','À compléter']]),'',
+`## 1. Objet et périmètre`,'',
+`La présente note décrit la structure et les points d'attention d'une application JavaScript/Electron à partir de ses fichiers, sans accès à un code source commenté.`,'',
+`## 2. Synthèse`,'',
+T(['Indicateur','Valeur'],[['Fichiers examinés',R.n],['Taille totale',kb(R.total)],['Liens internes entre fichiers',R.imports.length],['Dépendances externes',deps.length],['Points de vigilance',R.warn.length]]),'',
+`## 3. Points de vigilance`,'',
+T(['N°','Constat','Fichier','Ligne'],R.warn.map((w,i)=>[i+1,w[0],'`'+w[1]+'`',w[2]])),'',
+`## 4. Architecture`,'',
+T(['Rôle','Fichier','Indice'],roles.map(r=>[r[0],'`'+r[1]+'`',r[2]])),'',
+`## 5. Communications internes (IPC)`,'',
+T(['Canal','Appel','Emplacement'],ipc.map(i=>['`'+i[0]+'`',i[1],'`'+i[2]+':'+i[3]+'`'])),'',
+`## 6. Dépendances externes`,'',
+T(['Paquet','Fichiers concernés'],deps.slice(0,40).map(d=>['`'+d[0]+'`',d[1].size])),'',
+`## 7. Recommandations`,'',
+(rec.length?rec.map((r,i)=>(i+1)+'. '+r).join('\n'):`Aucune action corrective prioritaire n'est déduite de l'analyse automatique ; une revue manuelle reste recommandée.`),'',
+`## 8. Limites méthodologiques`,'',
+`- Analyse par motifs textuels : les fichiers minifiés, obfusqués ou construits dynamiquement peuvent échapper à la détection.`,
+`- Les points de vigilance sont des indices à vérifier, non des preuves de vulnérabilité.`,'',
+`---`,`INSTAD — Note générée avec mini-REA — à valider avant diffusion`].join('\n');
+}
+function graph(R){
+  const g=$('gr'),E=R.imports.filter(e=>e[0]!==e[1]);
+  if(!E.length){g.innerHTML='<div style="padding:12px">Aucun lien interne entre fichiers.</div>';$('grn').textContent='';return}
+  const deg={};E.forEach(([a,b])=>{deg[a]=(deg[a]||0)+1;deg[b]=(deg[b]||0)+1});
+  const all=Object.keys(deg),keep=new Set(all.sort((a,b)=>deg[b]-deg[a]).slice(0,60));
+  const ed=E.filter(([a,b])=>keep.has(a)&&keep.has(b));
+  const inc=new Set(ed.map(e=>e[1])),roots=[...keep].filter(n=>!inc.has(n)),dep={},q=roots.length?roots.slice():[[...keep][0]];
+  q.forEach(n=>dep[n]=0);
+  for(let i=0;i<q.length;i++){const n=q[i];for(const [a,b] of ed)if(a===n&&dep[b]===undefined){dep[b]=dep[n]+1;q.push(b)}}
+  keep.forEach(n=>{if(dep[n]===undefined)dep[n]=0});
+  const cols={};keep.forEach(n=>(cols[dep[n]]=cols[dep[n]]||[]).push(n));
+  const pos={};let mx=0,my=0;
+  Object.entries(cols).forEach(([d,ns])=>ns.sort().forEach((n,i)=>{const x=16+d*230,y=22+i*26;pos[n]=[x,y];mx=Math.max(mx,x+210);my=Math.max(my,y+16)}));
+  const entry=((R.pkg&&R.pkg.main)||'').replace(/^\.\//,'');
+  let s='<svg class="g" width="'+mx+'" height="'+my+'" viewBox="0 0 '+mx+' '+my+'" role="img" aria-label="Graphe des imports internes">';
+  for(const [a,b] of ed){const p=pos[a],r=pos[b];s+='<path d="M'+p[0]+','+p[1]+' C'+(p[0]+115)+','+p[1]+' '+(r[0]-115)+','+r[1]+' '+r[0]+','+r[1]+'"/>'}
+  for(const n in pos){const p=pos[n],b=n.split('/').pop(),t=b.length>24?b.slice(0,23)+'…':b;
+    s+='<circle r="4" cx="'+p[0]+'" cy="'+p[1]+'"'+(n===entry?' class="e"':'')+'><title>'+esc(n)+'</title></circle><text x="'+(p[0]+9)+'" y="'+(p[1]+4)+'">'+esc(t)+'<title>'+esc(n)+'</title></text>'}
+  g.innerHTML=s+'</svg>';
+  $('grn').textContent='Les imports vont de gauche à droite ; le point orange est le point d\'entrée. '+(all.length>60?'Seuls les 60 fichiers les plus connectés sur '+all.length+' sont affichés.':keep.size+' fichiers affichés.');
+}
+async function render(files,label){
+  const R=analyse(files);
+  const deps=Object.entries(R.ext_deps).sort((a,b)=>b[1].size-a[1].size);
+  const roles=[...new Map(R.roles.map(r=>[r[0]+r[1],r])).values()];
+  const ipc=[...new Map(R.ipc.map(r=>[r.join('|'),r])).values()];
+  $('kp').innerHTML=[[R.n,'fichiers'],[kb(R.total),'taille'],[R.imports.length,'liens internes'],[deps.length,'dépendances'],[R.warn.length,'alertes']]
+    .map(k=>'<div class="k"><b>'+k[0]+'</b><span>'+k[1]+'</span></div>').join('');
+  rows('tb',['Rôle','Fichier','Preuve'],roles.map(r=>[esc(r[0]),esc(r[1]),esc(r[2])]),'Aucune frontière Electron détectée.');
+  rows('tw',['Constat','Fichier','Ligne'],R.warn.map(w=>['<span class="warn">'+esc(w[0])+'</span>',esc(w[1]),w[2]]),'<span class="good">Aucune configuration risquée détectée.</span>');
+  rows('ti',['Canal','Appel','Fichier : ligne'],ipc.map(i=>[esc(i[0]),esc(i[1]),esc(i[2])+' : '+i[3]]),'Aucun canal IPC détecté.');
+  rows('td',['Paquet','Fichiers utilisateurs'],deps.slice(0,40).map(d=>[esc(d[0]),d[1].size]),'Aucune dépendance externe détectée.');
+  graph(R);
+  const L=[];
+  L.push('# Rapport mini-REA — '+label,'','Date : '+new Date().toLocaleDateString('fr-FR'),'');
+  if(R.pkg)L.push('## Application','','- Nom : '+(R.pkg.name||'?')+' '+(R.pkg.version||''),'- Point d\'entrée : '+(R.pkg.main||'non déclaré'),'');
+  L.push('## Inventaire','','- Fichiers : '+R.n+' ('+kb(R.total)+')','- Types : '+Object.entries(R.ext).sort((a,b)=>b[1]-a[1]).slice(0,8).map(e=>'.'+e[0]+' ×'+e[1]).join(', '),'','Plus gros fichiers :','');
+  for(const [p,s] of R.largest){const f=files.get(p);L.push('- `'+p+'` — '+kb(s)+(f.bytes&&s<2e7?' — SHA-256 `'+await sha(f.bytes)+'…`':''))}
+  L.push('','## Frontières Electron','');
+  roles.length?roles.forEach(r=>L.push('- **'+r[0]+'** : `'+r[1]+'` ('+r[2]+')')):L.push('Aucune détectée.');
+  L.push('','## Points de vigilance','');
+  R.warn.length?R.warn.forEach(w=>L.push('- '+w[0]+' — `'+w[1]+':'+w[2]+'`')):L.push('Aucun détecté.');
+  L.push('','## Canaux IPC','');
+  ipc.length?ipc.forEach(i=>L.push('- `'+i[0]+'` via '+i[1]+' — `'+i[2]+':'+i[3]+'`')):L.push('Aucun détecté.');
+  L.push('','## Dépendances','');
+  deps.length?deps.slice(0,40).forEach(d=>L.push('- `'+d[0]+'` ('+d[1].size+' fichier(s))')):L.push('Aucune détectée.');
+  L.push('- Modules Node intégrés : '+(Object.keys(R.builtin).join(', ')||'aucun'));
+  if(R.unresolved.length){L.push('','## Imports relatifs non résolus','');R.unresolved.slice(0,30).forEach(u=>L.push('- `'+u[1]+'` dans `'+u[0]+':'+u[2]+'`'))}
+  L.push('','## Limites','','- Analyse statique par motifs : aucun code n\'est exécuté.','- Les imports construits dynamiquement, les fichiers minifiés ou obfusqués et les fichiers ASAR « unpacked » peuvent échapper à l\'analyse.','- Les alertes sont des indices à vérifier, pas des preuves de faille.');
+  TECH=L.join('\n');LAST={R,deps,roles,ipc,label};INST=inst();MODE='tech';REPORT=TECH;
+  $('tg').textContent='Passer en version institutionnelle';
+  $('md').textContent=REPORT;
+  $('res').classList.remove('hid');
+  st(label+' : analyse terminée.');
+  $('res').scrollIntoView({behavior:'smooth'});
+}
+
+async function run(fn,label){
+  try{st('Analyse en cours…');const files=await fn();if(!files.size)throw new Error('aucun fichier lisible');await render(files,label)}
+  catch(e){st('Échec : '+e.message+'. Vérifiez que le fichier est un .zip, un .asar ou un dossier valide.')}
+}
+async function pick(file){
+  const lab=file.name;
+  if(/\.asar$/i.test(lab))return run(async()=>fromAsar(await file.arrayBuffer()),lab);
+  if(/\.zip$/i.test(lab))return run(async()=>fromZip(await file.arrayBuffer()),lab);
+  st('Format non pris en charge : utilisez .zip, .asar ou un dossier.');
+}
+$('f1').onchange=e=>e.target.files[0]&&pick(e.target.files[0]);
+$('f2').onchange=e=>{const l=[...e.target.files];if(l.length)run(()=>fromList(l),(l[0].webkitRelativePath||'dossier').split('/')[0])};
+const d=$('drop');
+['dragover','dragenter'].forEach(v=>d.addEventListener(v,e=>{e.preventDefault();d.classList.add('over')}));
+['dragleave','drop'].forEach(v=>d.addEventListener(v,e=>{e.preventDefault();d.classList.remove('over')}));
+d.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)pick(f)});
+$('tg').onclick=()=>{MODE=MODE==='tech'?'inst':'tech';REPORT=MODE==='tech'?TECH:INST;$('md').textContent=REPORT;$('tg').textContent=MODE==='tech'?'Passer en version institutionnelle':'Revenir à la version technique'};
+$('cp').onclick=async()=>{try{await navigator.clipboard.writeText(REPORT);$('cp').textContent='Copié'}catch(_){const r=document.createRange();r.selectNodeContents($('md'));getSelection().removeAllRanges();getSelection().addRange(r);$('cp').textContent='Sélectionné : copiez à la main'}setTimeout(()=>$('cp').textContent='Copier le rapport',2000)};
+})();
+</script>
+</body>
+</html>
